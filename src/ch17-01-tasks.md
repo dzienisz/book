@@ -8,6 +8,8 @@ keyword.
 
 Let’s write our first async function, and call it:
 
+<Listing number="17-1" file-name="src/main.rs" caption="Defining a very simple async function">
+
 ```rust
 fn main() {
     hello_async();
@@ -17,6 +19,8 @@ async fn hello_async() {
     println!("Hello, async!");
 }
 ```
+
+</Listing>
 
 If we compile and run this… nothing happens, and we get a compiler warning:
 
@@ -66,15 +70,10 @@ fn hello_async() -> impl Future<Output = ()> {
 }
 ```
 
-<!-- TODO: check whether the "unused Result" thing has been covered. -->
-
 That explains why we got the `unused_must_use` warning: writing `async fn` meant
-we were actually returning an anonymous `Future`. Just like with `Result`, Rust
-will let us know if we don’t use a `Future`. It is often a mistake to ignore an
-error in an operation your program performed. With a `Future`, it is even more
-significant. The compiler also warned us that “futures do nothing unless you
-`.await` or poll them”. That is, futures are *lazy*: they don’t do anything
-until you ask them to.
+we were actually returning an anonymous `Future`. The compiler will warn us that
+“futures do nothing unless you `.await` or poll them”. That is, futures are
+*lazy*: they don’t do anything until you ask them to.
 
 The compiler is telling us that ignoring a `Future` makes it completely useless!
 This is different from the behavior we saw when using `thread::spawn` in the
@@ -83,18 +82,23 @@ async. This allows Rust to avoid running async code unless it is actually
 needed. We will see why that is later on. For now, let’s start by awaiting the
 future returned by `hello_async` to actually have it run.
 
+> Note: Rust’s `await` keyword goes *after* the expression you are awaiting—that
+> is, it is a _postfix keyword_. This is different from what you might be used
+> to if you have used async in languages like JavaScript or C#. Rust chose this
+> because it makes chains of async and non-async methods much nicer to work
+> with. As of now, `await` is the only postfix keyword in the language.
+
+<Listing number="17-2" caption="Attempting to fix a compiler warning by awaiting a future" file-name="src/main.rs">
+
 <!-- does not compile -->
+
 ```rust
 fn main() {
     hello_async().await;
 }
 ```
 
-> Note: Rust’s `await` keyword goes *after* the expression you are awaiting—that
-> is, it is a *postfix keyword*. This is different from what you might be used
-> to if you have used async in languages like JavaScript or C#. Rust chose this
-> because it makes chains of async and non-async methods much nicer to work
-> with. As of now, `await` is the only postfix keyword in the language.
+</Listing>
 
 Oh no! We have gone from a compiler warning to an actual error:
 
@@ -108,6 +112,8 @@ error[E0728]: `await` is only allowed inside `async` functions and blocks
   |                   ^^^^^ only allowed inside `async` functions and blocks
 ```
 
+<!-- TODO: eliminate duplicate definition of runtime here and below -->
+
 This time, the compiler is informing us we cannot use `.await` in `main`,
 because `main` is not an `async` function. That is because async code needs a
 *runtime*: a Rust crate which manages the details of executing the asynchronous
@@ -117,7 +123,7 @@ operations, and so on.
 Most languages which support async, including C#, JavaScript, Go, Kotlin,
 Erlang, and Swift, bundle a runtime with the language. At least for now, Rust
 does not. Instead, there are many different async runtimes available, each of
-which makes different tradeoffs suitable to the use case they target.  For
+which makes different tradeoffs suitable to the use case they target. For
 example, a high-throughput web server with dozens of CPU cores and terabytes of
 RAM has very different different needs than a microcontroller with a single
 core, one gigabyte of RAM, and no ability to do heap allocations.
@@ -138,9 +144,11 @@ For now, go ahead and add the `trpl` crate to your `hello-async` project:
 $ cargo add trpl
 ```
 
-In our `main` function, let’s wrap the call to `hello_async` with the
+Then, in our `main` function, let’s wrap the call to `hello_async` with the
 `trpl::block_on` function, which takes in a `Future` and runs it until it
 completes.
+
+<Listing number="17-3" caption="Using the `block_on` helper function to wait on a future in non-async code" file-name="src/main.rs">
 
 ```rust
 fn main() {
@@ -152,9 +160,12 @@ async fn hello_async() {
 }
 ```
 
+</Listing>
+
 When we run this, we get the behavior we might have expected initially:
 
 <!-- TODO: paths in the output here! -->
+
 ```console
 $ cargo run
    Compiling hello-async v0.1.0 (/Users/chris/dev/chriskrycho/async-trpl-fun/hello-async)
@@ -214,6 +225,7 @@ Under the hood, when you call `.await`, Rust compiles that to code which calls
 `poll`, kind of like this:
 
 <!-- TODO: does not compile -->
+
 ```rust
 match hello_async().poll() {
     Ready(_) => {
@@ -230,6 +242,7 @@ the `Future` is still `Pending`? We need some way to try again. We would need to
 have something like this instead:
 
 <!-- TODO: does not compile -->
+
 ```rust
 let hello_async_fut = hello_async();
 loop {
@@ -244,11 +257,12 @@ loop {
 }
 ```
 
-And in fact, when we use `.await`, Rust compiles it to something very similar to
-that loop. If Rust compiled it to *exactly* that code, every `.await` would
-block the computer from doing anything else—the opposite of what we were going
-for! Instead, Rust internally makes sure that the loop can hand back control to
-the the context of the code where which is awaiting this little bit of code.
+When we use `.await`, Rust actually does compile it to something very similar to
+that loop. If Rust compiled it to *exactly* that code, though, every `.await`
+would block the computer from doing anything else—the opposite of what we were
+going for! Instead, Rust internally makes sure that the loop can hand back
+control to the the context of the code where which is awaiting this little bit
+of code.
 
 When we follow that chain far enough, eventually we end up back in some
 non-async function. At that point, something needs to “translate” between the
@@ -257,12 +271,13 @@ the top-level `poll()` call, scheduling and handing off between the different
 async operations which may be in flight, and often providing async versions of
 functionality like file I/O.
 
-Now we can understand what is happening in Listing 17-XX. The `main` function is
-not `async`—and it really cannot be: if it were, something would need to call
-`poll()` on whatever `main` returned! Instead, we use the `trpl::block_on`
-function, which polls the `Future` returned by `hello_async` until it returns
-`Ready`. Every async program in Rust has at least one place where it sets up an
-executor and executes code.
+Now we can understand why the compiler was blocking us in Listing 17-2 (before
+we added the `trpl::block_on` function). The `main` function is not `async`—and
+it really cannot be: if it were, something would need to call `poll()` on
+whatever `main` returned! Instead, we use the `trpl::block_on` function, which
+polls the `Future` returned by `hello_async` until it returns `Ready`. Every
+async program in Rust has at least one place where it sets up an executor and
+executes code.
 
 > Note: Under the hood, Rust uses *generators* so that it can hand off control
 > between different functions. These are an implementation detail, though, and
